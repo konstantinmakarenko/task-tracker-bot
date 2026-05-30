@@ -1,0 +1,18 @@
+# Секреты и окружение
+.env
+.env.local
+.env.*.local
+
+# Виртуальное окружение Python
+venv/
+env/
+.venv/
+
+# Кеш Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Файлы IDE
+.vscode/
+.idea/
