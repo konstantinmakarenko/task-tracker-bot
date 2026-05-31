@@ -18,13 +18,18 @@ logging.basicConfig(
 
 # Подключение к БД
 def get_db_connection():
-    return psycopg.connect(
-        host=os.getenv('DB_HOST'),
-        port=os.getenv('DB_PORT', '5432'),
-        dbname=os.getenv('DB_NAME'),
-        user=os.getenv('DB_USER'),
-        password=os.getenv('DB_PASSWORD')
-    )
+    try:
+        conn = psycopg.connect(
+            host=os.getenv('DB_HOST'),
+            port=os.getenv('DB_PORT', '5432'),
+            dbname=os.getenv('DB_NAME'),
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD')
+        )
+        return conn
+    except Exception as e:
+        print(f"DB connection error: {e}")
+        raise  # перебрасываем дальше, чтобы бот знал о проблеме
 
 # Создание таблицы при первом запуске
 def init_db():
