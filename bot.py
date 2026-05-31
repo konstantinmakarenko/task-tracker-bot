@@ -2,13 +2,24 @@ import os
 import logging
 from datetime import datetime
 
-from dotenv import load_dotenv
-import psycopg
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# Загружаем переменные окружения
-load_dotenv()
+# Загружаем переменные окружения (только если файл .env существует)
+if os.path.exists('.env'):
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("📁 Загружен .env файл", flush=True)
+else:
+    print("🐳 Запуск в Docker, используем переменные окружения", flush=True)
+
+# Подключаем psycopg (версия 3, не требует компиляции)
+try:
+    import psycopg
+    print("✅ psycopg (v3) импортирован", flush=True)
+except ImportError:
+    print("❌ psycopg не установлен!", flush=True)
+    raise
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,34 +31,39 @@ logging.basicConfig(
 def get_db_connection():
     try:
         conn = psycopg.connect(
-            host=os.getenv('DB_HOST'),
+            host=os.getenv('DB_HOST', 'localhost'),
             port=os.getenv('DB_PORT', '5432'),
-            dbname=os.getenv('DB_NAME'),
-            user=os.getenv('DB_USER'),
+            dbname=os.getenv('DB_NAME', 'task_tracker'),
+            user=os.getenv('DB_USER', 'postgres'),
             password=os.getenv('DB_PASSWORD')
         )
         return conn
     except Exception as e:
-        print(f"DB connection error: {e}")
+        print(f"❌ DB connection error: {e}", flush=True)
         raise
 
 # Создание таблицы при первом запуске
 def init_db():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS tasks (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            stream TEXT NOT NULL,
-            task_text TEXT NOT NULL,
-            is_done BOOLEAN DEFAULT FALSE,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    ''')
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                stream TEXT NOT NULL,
+                task_text TEXT NOT NULL,
+                is_done BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        ''')
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("✅ Таблица tasks проверена/создана", flush=True)
+    except Exception as e:
+        print(f"❌ init_db error: {e}", flush=True)
+        raise
 
 # Потоки
 STREAMS = {
@@ -69,11 +85,50 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• {STREAMS['n8n']}\n"
         f"• {STREAMS['linux']}\n"
         f"• {STREAMS['portfolio']}\n\n"
-        f"Используй кнопки ниже для управления задачами.",
+        f"Используй кнопки ниже для управления задачами.\n\n"
+        f"Или команды:\n"
+        f"/add n8n задача\n"
+        f"/add linux задача\n"
+        f"/add portfolio задача\n"
+        f"/list\n"
+        f"/stats\n"
+        f"/done ID\n"
+        f"/delete ID",
         reply_markup=reply_markup
     )
 
-# Добавление задачи - выбор потока
+# Добавление задачи через команду /add
+async def add_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "Использование: /add <поток> <задача>\n\n"
+            "Потоки: n8n, linux, portfolio\n\n"
+            "Пример: /add n8n Изучить Docker"
+        )
+        return
+
+    stream = context.args[0].lower()
+    task_text = ' '.join(context.args[1:])
+
+    if stream not in STREAMS:
+        await update.message.reply_text(f"❌ Неизвестный поток. Доступны: n8n, linux, portfolio")
+        return
+
+    user_id = update.message.from_user.id
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO tasks (user_id, stream, task_text) VALUES (%s, %s, %s)",
+        (user_id, stream, task_text)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    await update.message.reply_text(f"✅ Задача добавлена в поток {STREAMS[stream]}!")
+
+# Добавление задачи - выбор потока (кнопки)
 async def add_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📞 add_task_start вызвана!", flush=True)
     query = update.callback_query
@@ -135,10 +190,17 @@ async def save_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Список задач
 async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📞 list_tasks вызвана!", flush=True)
-    query = update.callback_query
-    await query.answer()
 
-    user_id = query.from_user.id
+    # Поддержка как команды, так и callback
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        user_id = query.from_user.id
+        send_message = query.edit_message_text
+    else:
+        user_id = update.message.from_user.id
+        send_message = update.message.reply_text
+
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -150,7 +212,7 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     if not tasks:
-        await query.edit_message_text("📭 У тебя пока нет задач. Добавь первую через кнопку ➕")
+        await send_message("📭 У тебя пока нет задач. Добавь первую через /add или кнопку ➕")
         return
 
     tasks_by_stream = {}
@@ -166,15 +228,21 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += "\n".join(stream_tasks) + "\n\n"
 
     message += "\n_Чтобы отметить задачу выполненной, используй /done <id>_"
-    await query.edit_message_text(message, parse_mode='Markdown')
+    await send_message(message, parse_mode='Markdown')
 
 # Статистика
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📞 stats вызвана!", flush=True)
-    query = update.callback_query
-    await query.answer()
 
-    user_id = query.from_user.id
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        user_id = query.from_user.id
+        send_message = query.edit_message_text
+    else:
+        user_id = update.message.from_user.id
+        send_message = update.message.reply_text
+
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -198,7 +266,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_done += done
 
     message += f"*Итого:* {total_done}/{total_tasks} выполнено"
-    await query.edit_message_text(message, parse_mode='Markdown')
+    await send_message(message, parse_mode='Markdown')
 
 # Отметить задачу выполненной
 async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -276,12 +344,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"⚠️ Неизвестный callback: {data}", flush=True)
 
 def main():
+    print("🚀 Запуск бота...", flush=True)
+
     # Инициализация БД
     try:
         init_db()
         print("✅ Database connection successful", flush=True)
     except Exception as e:
         print(f"❌ Database connection FAILED: {e}", flush=True)
+        return
 
     # Создаём приложение
     token = os.getenv('BOT_TOKEN')
@@ -293,6 +364,9 @@ def main():
 
     # Команды
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("add", add_task_command))
+    application.add_handler(CommandHandler("list", list_tasks))
+    application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("done", mark_done))
     application.add_handler(CommandHandler("delete", delete_task))
 

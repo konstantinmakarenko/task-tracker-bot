@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # PostgreSQL база данных
   postgres:
     image: postgres:15-alpine
     container_name: task_tracker_db
@@ -20,13 +19,12 @@ services:
       timeout: 5s
       retries: 5
 
-  # Telegram бот
   bot:
-    build: .
+    image: konstantinmakarenko/task-tracker-bot:latest   # ← используем образ из Docker Hub
     container_name: task_tracker_bot
     environment:
       BOT_TOKEN: ${BOT_TOKEN?err=BOT_TOKEN is required}
-      DB_HOST: postgres  # имя сервиса из docker-compose
+      DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: ${DB_NAME:-task_tracker}
       DB_USER: ${DB_USER:-postgres}
