@@ -247,33 +247,84 @@ async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ID задачи должен быть числом")
 
 def main():
+    # ПРИНУДИТЕЛЬНЫЙ ВЫВОД В ЛОГ (сразу, чтобы точно попасть в логи)
+    import sys
+    print("=" * 50, flush=True)
+    print("БОТ ЗАПУЩЕН (диагностический режим)", flush=True)
+    print("=" * 50, flush=True)
+
+    # 1. Проверяем переменные окружения
+    print("\n1. ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ:", flush=True)
+    required_vars = ['BOT_TOKEN', 'DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD']
+    for var in required_vars:
+        value = os.getenv(var)
+        if value:
+            # Показываем только первые 5 символов токена и пароля, остальное звездочками
+            if var == 'BOT_TOKEN' or var == 'DB_PASSWORD':
+                if len(value) > 5:
+                    masked = value[:5] + '*' * (len(value) - 5)
+                else:
+                    masked = '***'
+                print(f"   ✓ {var}: {masked}", flush=True)
+            else:
+                print(f"   ✓ {var}: {value}", flush=True)
+        else:
+            print(f"   ✗ {var}: НЕ ЗАДАНА!", flush=True)
+
+    # 2. Проверяем подключение к БД
+    print("\n2. ПРОВЕРКА ПОДКЛЮЧЕНИЯ К БД:", flush=True)
     try:
-        # Инициализация БД
-        init_db()
-        print("✅ Database connection successful")
+        conn = get_db_connection()
+        print("   ✓ Подключение к БД успешно!", flush=True)
+
+        # Проверяем, существует ли таблица
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM tasks LIMIT 1")
+        print("   ✓ Таблица tasks существует и доступна", flush=True)
+        cur.close()
+        conn.close()
     except Exception as e:
-        print(f"❌ Database connection FAILED: {e}")
+        print(f"   ✗ Ошибка БД: {e}", flush=True)
+        print("   Бот продолжит работу, но функции с БД будут недоступны", flush=True)
 
-    # Создаём приложение
+    # 3. Проверяем токен бота
+    print("\n3. ПРОВЕРКА ТОКЕНА БОТА:", flush=True)
     token = os.getenv('BOT_TOKEN')
-    application = Application.builder().token(token).build()
+    if not token:
+        print("   ✗ ТОКЕН НЕ ЗАДАН! Бот не сможет запуститься", flush=True)
+        print("   Ждём 60 секунд для диагностики...", flush=True)
+        import time
+        time.sleep(60)
+        return
 
-    # Команды
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("done", mark_done))
-    application.add_handler(CommandHandler("delete", delete_task))
+    print("   ✓ Токен получен", flush=True)
 
-    # Callback-обработчики
-    application.add_handler(CallbackQueryHandler(add_task_start, pattern='^add$'))
-    application.add_handler(CallbackQueryHandler(list_tasks, pattern='^list$'))
-    application.add_handler(CallbackQueryHandler(stats, pattern='^stats$'))
-    application.add_handler(CallbackQueryHandler(select_stream, pattern='^stream_'))
+    # 4. Пытаемся запустить бота
+    print("\n4. ЗАПУСК БОТА...", flush=True)
+    try:
+        application = Application.builder().token(token).build()
+        print("   ✓ Приложение создано", flush=True)
 
-    # Обработчик текста для задач
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_task))
+        # Регистрируем обработчики
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("done", mark_done))
+        application.add_handler(CommandHandler("delete", delete_task))
+        application.add_handler(CallbackQueryHandler(add_task_start, pattern='^add$'))
+        application.add_handler(CallbackQueryHandler(list_tasks, pattern='^list$'))
+        application.add_handler(CallbackQueryHandler(stats, pattern='^stats$'))
+        application.add_handler(CallbackQueryHandler(select_stream, pattern='^stream_'))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_task))
+        print("   ✓ Обработчики зарегистрированы", flush=True)
 
-    # Запуск
-    application.run_polling()
+        print("   ✓ Запускаем polling...", flush=True)
+        application.run_polling()
+    except Exception as e:
+        print(f"   ✗ КРИТИЧЕСКАЯ ОШИБКА при запуске бота: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        print("\n   Ждём 60 секунд для диагностики...", flush=True)
+        import time
+        time.sleep(60)
 
 if __name__ == '__main__':
     main()
