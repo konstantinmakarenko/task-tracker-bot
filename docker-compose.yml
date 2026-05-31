@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:15-alpine
+    container_name: task_tracker_db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-task_tracker}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD?err=DB_PASSWORD is required}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-task_tracker}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Telegram бот
+  bot:
+    build: .
+    container_name: task_tracker_bot
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN?err=BOT_TOKEN is required}
+      DB_HOST: postgres  # имя сервиса из docker-compose
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-task_tracker}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD?err=DB_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
