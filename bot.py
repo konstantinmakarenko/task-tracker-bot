@@ -242,8 +242,12 @@ async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ID задачи должен быть числом")
 
 def main():
-    # Инициализация БД
-    init_db()
+    try:
+        # Инициализация БД
+        init_db()
+        print("✅ Database connection successful")
+    except Exception as e:
+        print(f"❌ Database connection FAILED: {e}")
 
     # Создаём приложение
     token = os.getenv('BOT_TOKEN')
