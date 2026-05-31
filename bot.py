@@ -29,7 +29,7 @@ def get_db_connection():
         return conn
     except Exception as e:
         print(f"DB connection error: {e}")
-        raise  # перебрасываем дальше, чтобы бот знал о проблеме
+        raise
 
 # Создание таблицы при первом запуске
 def init_db():
@@ -49,13 +49,14 @@ def init_db():
     cur.close()
     conn.close()
 
-# Потоки (можно расширять)
+# Потоки
 STREAMS = {
     'n8n': '🤖 n8n и Codex',
     'linux': '🐧 Linux + Bash + Python',
     'portfolio': '📁 Portfolio'
 }
 
+# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("➕ Добавить задачу", callback_data='add')],
@@ -72,7 +73,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+# Добавление задачи - выбор потока
 async def add_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("📞 add_task_start вызвана!", flush=True)
     query = update.callback_query
     await query.answer()
 
@@ -86,9 +89,10 @@ async def add_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Выбери поток, в который добавить задачу:",
         reply_markup=reply_markup
     )
-    context.user_data['waiting_for_stream'] = True
 
+# Выбор потока
 async def select_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("📞 select_stream вызвана!", flush=True)
     query = update.callback_query
     await query.answer()
 
@@ -106,6 +110,7 @@ async def select_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data['waiting_for_task'] = True
 
+# Сохранение задачи
 async def save_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('waiting_for_task'):
         task_text = update.message.text
@@ -127,7 +132,9 @@ async def save_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['waiting_for_task'] = False
         context.user_data['selected_stream'] = None
 
+# Список задач
 async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("📞 list_tasks вызвана!", flush=True)
     query = update.callback_query
     await query.answer()
 
@@ -146,7 +153,6 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("📭 У тебя пока нет задач. Добавь первую через кнопку ➕")
         return
 
-    # Группируем по потокам
     tasks_by_stream = {}
     for task_id, stream, text, is_done in tasks:
         if stream not in tasks_by_stream:
@@ -162,7 +168,9 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message += "\n_Чтобы отметить задачу выполненной, используй /done <id>_"
     await query.edit_message_text(message, parse_mode='Markdown')
 
+# Статистика
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("📞 stats вызвана!", flush=True)
     query = update.callback_query
     await query.answer()
 
@@ -192,6 +200,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message += f"*Итого:* {total_done}/{total_tasks} выполнено"
     await query.edit_message_text(message, parse_mode='Markdown')
 
+# Отметить задачу выполненной
 async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Использование: /done <id_задачи>")
@@ -219,6 +228,7 @@ async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("ID задачи должен быть числом")
 
+# Удалить задачу
 async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Использование: /delete <id_задачи>")
@@ -246,85 +256,56 @@ async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("ID задачи должен быть числом")
 
+# Единый обработчик для всех callback-запросов (кнопок)
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    print(f"🔘 Получен callback: {data}", flush=True)
+
+    if data == 'add':
+        await add_task_start(update, context)
+    elif data == 'list':
+        await list_tasks(update, context)
+    elif data == 'stats':
+        await stats(update, context)
+    elif data.startswith('stream_'):
+        await select_stream(update, context)
+    else:
+        print(f"⚠️ Неизвестный callback: {data}", flush=True)
+
 def main():
-    # ПРИНУДИТЕЛЬНЫЙ ВЫВОД В ЛОГ (сразу, чтобы точно попасть в логи)
-    import sys
-    print("=" * 50, flush=True)
-    print("БОТ ЗАПУЩЕН (диагностический режим)", flush=True)
-    print("=" * 50, flush=True)
-
-    # 1. Проверяем переменные окружения
-    print("\n1. ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ:", flush=True)
-    required_vars = ['BOT_TOKEN', 'DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD']
-    for var in required_vars:
-        value = os.getenv(var)
-        if value:
-            # Показываем только первые 5 символов токена и пароля, остальное звездочками
-            if var == 'BOT_TOKEN' or var == 'DB_PASSWORD':
-                if len(value) > 5:
-                    masked = value[:5] + '*' * (len(value) - 5)
-                else:
-                    masked = '***'
-                print(f"   ✓ {var}: {masked}", flush=True)
-            else:
-                print(f"   ✓ {var}: {value}", flush=True)
-        else:
-            print(f"   ✗ {var}: НЕ ЗАДАНА!", flush=True)
-
-    # 2. Проверяем подключение к БД
-    print("\n2. ПРОВЕРКА ПОДКЛЮЧЕНИЯ К БД:", flush=True)
+    # Инициализация БД
     try:
-        conn = get_db_connection()
-        print("   ✓ Подключение к БД успешно!", flush=True)
-
-        # Проверяем, существует ли таблица
-        cur = conn.cursor()
-        cur.execute("SELECT 1 FROM tasks LIMIT 1")
-        print("   ✓ Таблица tasks существует и доступна", flush=True)
-        cur.close()
-        conn.close()
+        init_db()
+        print("✅ Database connection successful", flush=True)
     except Exception as e:
-        print(f"   ✗ Ошибка БД: {e}", flush=True)
-        print("   Бот продолжит работу, но функции с БД будут недоступны", flush=True)
+        print(f"❌ Database connection FAILED: {e}", flush=True)
 
-    # 3. Проверяем токен бота
-    print("\n3. ПРОВЕРКА ТОКЕНА БОТА:", flush=True)
+    # Создаём приложение
     token = os.getenv('BOT_TOKEN')
     if not token:
-        print("   ✗ ТОКЕН НЕ ЗАДАН! Бот не сможет запуститься", flush=True)
-        print("   Ждём 60 секунд для диагностики...", flush=True)
-        import time
-        time.sleep(60)
+        print("❌ BOT_TOKEN не задан!", flush=True)
         return
 
-    print("   ✓ Токен получен", flush=True)
+    application = Application.builder().token(token).build()
 
-    # 4. Пытаемся запустить бота
-    print("\n4. ЗАПУСК БОТА...", flush=True)
-    try:
-        application = Application.builder().token(token).build()
-        print("   ✓ Приложение создано", flush=True)
+    # Команды
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("done", mark_done))
+    application.add_handler(CommandHandler("delete", delete_task))
 
-        # Регистрируем обработчики
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("done", mark_done))
-        application.add_handler(CommandHandler("delete", delete_task))
-        application.add_handler(CallbackQueryHandler(add_task_start, pattern='^add$'))
-        application.add_handler(CallbackQueryHandler(list_tasks, pattern='^list$'))
-        application.add_handler(CallbackQueryHandler(stats, pattern='^stats$'))
-        application.add_handler(CallbackQueryHandler(select_stream, pattern='^stream_'))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_task))
-        print("   ✓ Обработчики зарегистрированы", flush=True)
+    # Единый обработчик для всех callback-запросов (кнопок)
+    application.add_handler(CallbackQueryHandler(handle_callback))
 
-        print("   ✓ Запускаем polling...", flush=True)
-        application.run_polling()
-    except Exception as e:
-        print(f"   ✗ КРИТИЧЕСКАЯ ОШИБКА при запуске бота: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
-        print("\n   Ждём 60 секунд для диагностики...", flush=True)
-        import time
-        time.sleep(60)
+    # Обработчик текста для задач
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_task))
+
+    print("✅ Бот запускается...", flush=True)
+
+    # Запуск
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
