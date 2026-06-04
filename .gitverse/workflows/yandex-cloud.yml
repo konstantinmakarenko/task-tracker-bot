@@ -1,0 +1,41 @@
+name: Deploy to Yandex Cloud Registry
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare Kaniko credentials for Yandex Cloud
+        run: |
+          mkdir -p "${{ gitverse.workspace }}/.docker"
+          AUTH=$(echo -n "oauth:${{ secrets.YC_TOKEN }}" | base64 -w0)
+          cat > "${{ gitverse.workspace }}/.docker/config.json" <<EOF
+          {
+            "auths": {
+              "cr.yandex": {
+                "auth": "${AUTH}"
+              }
+            }
+          }
+          EOF
+          chmod 600 "${{ gitverse.workspace }}/.docker/config.json"
+
+      - name: Build and push with Kaniko
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=${{ gitverse.workspace }}/Dockerfile
+            --destination=cr.yandex/${{ secrets.YC_REGISTRY_ID }}/task-tracker-bot:latest
+            --destination=cr.yandex/${{ secrets.YC_REGISTRY_ID }}/task-tracker-bot:${{ github.sha }}
+            --cache=true

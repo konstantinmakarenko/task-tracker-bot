@@ -1,0 +1,43 @@
+name: Deploy to Docker Hub
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create Docker config.json for Docker Hub
+        run: |
+          mkdir -p "${{ gitverse.workspace }}/.docker"
+          # Создаём JSON вручную, экранируя кавычки
+          cat > "${{ gitverse.workspace }}/.docker/config.json" <<EOF
+          {
+            "auths": {
+              "https://index.docker.io/v1/": {
+                "auth": "$(echo -n "${{ vars.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" | base64 | tr -d '\n')"
+              }
+            }
+          }
+          EOF
+          chmod 600 "${{ gitverse.workspace }}/.docker/config.json"
+          echo "Config file created:"
+          cat "${{ gitverse.workspace }}/.docker/config.json"
+
+      - name: Build and push with Kaniko
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=${{ gitverse.workspace }}/Dockerfile
+            --destination=docker.io/${{ vars.DOCKER_USERNAME }}/task-tracker-bot:latest
+            --destination=docker.io/${{ vars.DOCKER_USERNAME }}/task-tracker-bot:${{ github.sha }}
+            --cache=true
