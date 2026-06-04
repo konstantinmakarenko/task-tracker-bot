@@ -26,6 +26,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 # Подключение к БД
 def get_db_connection():
@@ -74,6 +75,9 @@ STREAMS = {
 
 # Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Сбрасываем состояние при старте
+    context.user_data.clear()
+
     keyboard = [
         [InlineKeyboardButton("➕ Добавить задачу", callback_data='add')],
         [InlineKeyboardButton("📋 Список задач", callback_data='list')],
@@ -130,14 +134,16 @@ async def add_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Добавление задачи - выбор потока (кнопки)
 async def add_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("📞 add_task_start вызвана!", flush=True)
     query = update.callback_query
-    await query.answer()
+    await query.answer()  # Отвечаем на callback
+
+    print("📞 add_task_start вызвана!", flush=True)
 
     keyboard = [
         [InlineKeyboardButton(STREAMS['n8n'], callback_data='stream_n8n')],
         [InlineKeyboardButton(STREAMS['linux'], callback_data='stream_linux')],
-        [InlineKeyboardButton(STREAMS['portfolio'], callback_data='stream_portfolio')]
+        [InlineKeyboardButton(STREAMS['portfolio'], callback_data='stream_portfolio')],
+        [InlineKeyboardButton("« Назад", callback_data='back_to_menu')]  # Кнопка назад
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
@@ -147,9 +153,10 @@ async def add_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Выбор потока
 async def select_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("📞 select_stream вызвана!", flush=True)
     query = update.callback_query
-    await query.answer()
+    await query.answer()  # Отвечаем на callback
+
+    print("📞 select_stream вызвана!", flush=True)
 
     stream_map = {
         'stream_n8n': 'n8n',
@@ -159,19 +166,32 @@ async def select_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stream = stream_map.get(query.data)
     if stream:
         context.user_data['selected_stream'] = stream
+        context.user_data['waiting_for_task'] = True
         await query.edit_message_text(
             f"Выбран поток: {STREAMS[stream]}\n\n"
-            f"Теперь отправь текст задачи одним сообщением:"
+            f"Теперь отправь текст задачи одним сообщением:\n\n"
+            f"(или отправь /cancel чтобы отменить)"
         )
-        context.user_data['waiting_for_task'] = True
 
 # Сохранение задачи
 async def save_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('waiting_for_task'):
-        task_text = update.message.text
-        stream = context.user_data.get('selected_stream')
-        user_id = update.message.from_user.id
+    # Проверяем, ждем ли мы задачу
+    if not context.user_data.get('waiting_for_task'):
+        return
 
+    task_text = update.message.text
+    stream = context.user_data.get('selected_stream')
+    user_id = update.message.from_user.id
+
+    if not stream:
+        await update.message.reply_text(
+            "❌ Ошибка: поток не выбран.\n"
+            "Используй кнопки меню для добавления задачи."
+        )
+        context.user_data.clear()
+        return
+
+    try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
@@ -184,17 +204,53 @@ async def save_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(f"✅ Задача добавлена в поток {STREAMS[stream]}!")
 
-        context.user_data['waiting_for_task'] = False
-        context.user_data['selected_stream'] = None
+        # Очищаем состояние после успешного добавления
+        context.user_data.clear()
+
+        # Показываем меню снова
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить задачу", callback_data='add')],
+            [InlineKeyboardButton("📋 Список задач", callback_data='list')],
+            [InlineKeyboardButton("📊 Статистика", callback_data='stats')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Что хочешь сделать дальше?",
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении задачи: {e}")
+        await update.message.reply_text("❌ Ошибка при сохранении задачи. Попробуй еще раз.")
+        context.user_data.clear()
+
+# Отмена добавления задачи
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text("❌ Добавление задачи отменено.")
+
+    # Показываем меню
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить задачу", callback_data='add')],
+        [InlineKeyboardButton("📋 Список задач", callback_data='list')],
+        [InlineKeyboardButton("📊 Статистика", callback_data='stats')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "Возвращаемся в главное меню:",
+        reply_markup=reply_markup
+    )
 
 # Список задач
 async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Сбрасываем состояние при просмотре списка
+    context.user_data.clear()
+
     print("📞 list_tasks вызвана!", flush=True)
 
     # Поддержка как команды, так и callback
     if update.callback_query:
         query = update.callback_query
-        await query.answer()
+        await query.answer()  # Отвечаем на callback
         user_id = query.from_user.id
         send_message = query.edit_message_text
     else:
@@ -228,15 +284,26 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += "\n".join(stream_tasks) + "\n\n"
 
     message += "\n_Чтобы отметить задачу выполненной, используй /done <id>_"
-    await send_message(message, parse_mode='Markdown')
+    message += "\n_Чтобы удалить задачу, используй /delete <id>_"
+
+    # Добавляем кнопку "Назад" для callback режима
+    if update.callback_query:
+        keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data='back_to_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await send_message(message, parse_mode='Markdown', reply_markup=reply_markup)
+    else:
+        await send_message(message, parse_mode='Markdown')
 
 # Статистика
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Сбрасываем состояние при просмотре статистики
+    context.user_data.clear()
+
     print("📞 stats вызвана!", flush=True)
 
     if update.callback_query:
         query = update.callback_query
-        await query.answer()
+        await query.answer()  # Отвечаем на callback
         user_id = query.from_user.id
         send_message = query.edit_message_text
     else:
@@ -266,10 +333,20 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_done += done
 
     message += f"*Итого:* {total_done}/{total_tasks} выполнено"
-    await send_message(message, parse_mode='Markdown')
+
+    # Добавляем кнопку "Назад" для callback режима
+    if update.callback_query:
+        keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data='back_to_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await send_message(message, parse_mode='Markdown', reply_markup=reply_markup)
+    else:
+        await send_message(message, parse_mode='Markdown')
 
 # Отметить задачу выполненной
 async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Сбрасываем состояние
+    context.user_data.clear()
+
     if not context.args:
         await update.message.reply_text("Использование: /done <id_задачи>")
         return
@@ -298,6 +375,9 @@ async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Удалить задачу
 async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Сбрасываем состояние
+    context.user_data.clear()
+
     if not context.args:
         await update.message.reply_text("Использование: /delete <id_задачи>")
         return
@@ -324,13 +404,31 @@ async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("ID задачи должен быть числом")
 
-# Единый обработчик для всех callback-запросов (кнопок)
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Возврат в главное меню
+async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    context.user_data.clear()
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить задачу", callback_data='add')],
+        [InlineKeyboardButton("📋 Список задач", callback_data='list')],
+        [InlineKeyboardButton("📊 Статистика", callback_data='stats')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        "Главное меню:",
+        reply_markup=reply_markup
+    )
+
+# Единый обработчик для всех callback-запросов (кнопок)
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
     data = query.data
     print(f"🔘 Получен callback: {data}", flush=True)
+
+    # Убираем query.answer() отсюда, так как он будет вызван в каждой функции
 
     if data == 'add':
         await add_task_start(update, context)
@@ -338,10 +436,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await list_tasks(update, context)
     elif data == 'stats':
         await stats(update, context)
+    elif data == 'back_to_menu':
+        await back_to_menu(update, context)
     elif data.startswith('stream_'):
         await select_stream(update, context)
     else:
         print(f"⚠️ Неизвестный callback: {data}", flush=True)
+        await query.answer("Неизвестная команда", show_alert=True)
 
 def main():
     print("🚀 Запуск бота...", flush=True)
@@ -369,11 +470,12 @@ def main():
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("done", mark_done))
     application.add_handler(CommandHandler("delete", delete_task))
+    application.add_handler(CommandHandler("cancel", cancel))  # Добавляем команду отмены
 
-    # Единый обработчик для всех callback-запросов (кнопок)
+    # Обработчик для callback-запросов (кнопок)
     application.add_handler(CallbackQueryHandler(handle_callback))
 
-    # Обработчик текста для задач
+    # Обработчик текста для задач (только если не команда)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_task))
 
     print("✅ Бот запускается...", flush=True)
